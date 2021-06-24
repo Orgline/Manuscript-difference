@@ -80,23 +80,23 @@
 % Timeline of recursive and non-recursive GEMM.
 
 \begin{abstract}
-   Out-of-core processing aims to handle a large amount of data when the memory is limited. There exist several out-of-core applications including disk-memory and CPU-GPU processing. Usually, these kinds of applications' performance can be expected to be close to the peak performance of the in-core computations, because the data movement between different memory hierarchies can be overlapped by the in-core computations perfectly. However, with the emergence of matrix accelerators such as TensorCore GPU, the imbalance between the speed of computations and data movement is further exacerbated, such that even high computation intensity kernels such as dense matrix factorization can be dominated by data movement cost. In such cases, the algorithms need to be redesigned to reduce communication volume and overlap the data movement by pipelines. In this paper, we select classic Gram-Schmidt QR factorization as an example to illustrate our recursive strategy, which shows fewer amounts data movement and a higher overlapping ratio than the convention blocking QR factorization algorithm. And we suggest this technique can potentially be applied to more broad matrix computations kernels. 
+   Out-of-core processing aims to handle large amount of data when the memory is limited. There exists several out-of-core applications including disk-memory and CPU-GPU processing. Ideally, these out-of-core applications can be expected to be close to the peak performance of the in-core computations, if the data movement between different memory hierarchies can be overlapped by the in-core computations effectively. However, with the emergence of matrix accelerators such as TensorCore GPU, the imbalance between the speed of computations and data movement is further exacerbated, such that even high computation intensity kernels can be dominated by data movement cost. In such cases, the algorithms need to be redesigned to reduce communication volume and overlap the data movement by pipelines. In this paper, we select classic Gram-Schmidt QR factorization as an example to illustrate our recursive strategy, which shows smaller amount of data movement and higher overlapping ratio than the conventional blocking QR factorization algorithm. The results suggest this technique can potentially be applied to broader matrix computations kernels. 
 \end{abstract}
 \maketitle
 
 \section{Introduction}
 Out-of-core (OOC) means out of memory (when main memory was called
-core memory a long time ago, as in core dump, which is stilled used to name a snapshot of the main memory of a process for debugging). However,
-OOC has received relatively less attention than distributed parallel computing but we think OOC has its use cases in the era of data-centric computing.
+core memory a long time ago). However,
+OOC has received less attention than distributed parallel computing but we think OOC has its use cases in the era of data-centric computing.
 Both can enable solving bigger problems that cannot fit in the memory
 of a single node, but the latter also entails using multiple processing
-units. In the era of accelerators, we think OOC is becoming more
-important and enables an increasingly common use case because of
+units. In the era of vector and matrix accelerators, we think OOC is becoming more
+important as it enables an increasingly common use case because of
 the convenience of using a single node and the ubiquitous accessibility of such
-a platform. Furthermore, for
+platform. Furthermore, for
 some problems, a single accelerator can rival the speed of a
-medium cluster of CPUs. For example, a single A100 GPU with TensorCore
-has a peak performance at 300~TFLOPS, which is equal to about thousands of modern
+medium sized cluster of CPUs. For example, a single A100 GPU with TensorCore
+has a peak performance at around 300~TFLOPS, which is equal to about thousands of modern
 high-end CPU cores with AVX512 vector units. Yet, the memory capacity of
 the accelerator is often very limited. 
 The limited problem size due to insufficient memory capacity greatly
@@ -104,7 +104,7 @@ limits the potential of the extremely fast accelerator.
 
 A particular class of problems that potentially benefits from
 OOC with accelerators is dense linear algebra.  In this paper, we explore
-techniques to enable efficient OOC computing on extremely fast accelerators, and the computing is no longer limited by scarce GPU memory. The key challenge
+techniques to enable efficient OOC computing on extremely fast accelerators such that the computing is no longer limited by scarce GPU memory. The key challenge
 is the management of data movement.  It has been shown that the
 optimal data movement volume is asymptotically $O(\frac{\flops}{\sqrt{M}})$ \cite{ballard2011minimizing}
 where $\flops{}$ is
@@ -117,7 +117,7 @@ $$ O(\frac{\flops}{\sqrt{M} R_1}) $$
 while the time spent doing computation is
 $$ O(\frac{\flops}{R_2})$$
 
-Now with the TensorCore unit (aka neural engines,
+Now with the TensorCore unit (a.k.a. neural engines,
 neural processors, or matrix accelerators)
 the ratio of matrix computation speed and data
 movement speed is getting extremely high. 
@@ -127,16 +127,16 @@ as matrix computing units,
 the $R_2$ can be $10^{14}$, while 
 $\sqrt{M}R_1$ is $10^{5} \times 10^{9.5}=10^{14.5}$. 
 Assuming an algorithm
-achieves optimal data movement, the cost of data movement takes
-comparable time as computation. Such a trend is likely going to continue. 
+achieves optimal data movement, the cost of data movement is
+comparable to computation. Such trend is likely going to continue. 
 With a suboptimal data movement algorithm the communication
 may dominate computation. In this situation, it's critically important
-to minimize data movement, increase overlapping between
+to minimize data movement and increase overlapping between
 computation and communication, while at the same time without increasing
-\flops{} or decreasing the execution rate $R_2$ too much. 
+\flops{} or decreasing the execution rate $R_2$ significantly. 
 
 There has been a long history and interest in OOC computing for linear algebra algorithms. And several similar OOC applications exist that work for CPU-GPU hierarchy. For instance, BLASX~\cite{wang2016blasx} and cuBLASXt provides OOC high-performance BLAS3 operations and some other specific applications such as OOC SVD~\cite{lu2020reducing} and~\cite{kabir2017framework}. However, over a long
-period of accumulating faster computation speed increase over data movement speed
+period of accumulating faster computation speed growth over data movement speed
 and with the advent of specialized matrix accelerator in addition to vector
 accelerator, 
 the balance between computing and communication is further skewed. As a result, the conventional design pattern of OOC algorithms becomes inadequate to hide
@@ -146,18 +146,18 @@ present in dense linear algebra operations.
 To make the discussion concrete, we use NVIDIA TensorCore as an example
 of a matrix accelerator. On NVIDIA Volta and Ampere architectures,
 matrix computations can not only be carried out by CUDA cores (SGEMM), but also by TensorCore units (TC-GEMM). 
-On Nvidia V100 GPU, SGEMM usually performs at 14 TFLOPS, while the peak performance of TC-GEMM can reach 112 TFLOPS, representing an 8x speedup
-by using TensorCore over CUDA cores. On the newer A100 GPU, the ratio is even higher at 16x. 
+On Nvidia V100 GPU, CUDA core SGEMM usually performs at 14 TFLOPS, whereas TensorCore TC-GEMM can reach 112 TFLOPS, representing an 8x speedup by using the matrix accelerator. 
+On the newer A100 GPU, the ratio is even higher at 16x. 
 But the time cost of data movement between host and device and memory capacity do not
 improve commensurately. 
 Consequently, the algorithms used by state-of-the-art works such as BLASX~\cite{wang2016blasx}
 is no longer adequate to hide all the communication costs. 
-For instance, in terms of the V100 PCIe graphic card, the peak rate of data movement is around 13GB/s, which means moving two matrices with a size $16384*16384$ from host to device will take around 150ms. Meanwhile, the computation using SGEMM will take 630ms while using TC-GEMM will take 97ms. It is evident that data movement
-will likely become the bottleneck. 
+For instance, in terms of the V100 PCIe graphic card, the peak rate of data movement is around 13GB/s, which means moving two matrices with a size $16384*16384$ from host to device will take around 150ms. To put it into context, the computation using SGEMM will take 630ms while using TC-GEMM will take 97ms. It is evident that data movement
+will very likely become the bottleneck. 
 
 
 In view of the new situation, the TensorCore-based OOC application optimization needs
-to be data movement-centric. Without careful arrangement of data access patterns, the overall performance will be dominated by the data movement rather than the computations. So, there are two main challenges to be tackled to design high-performance OOC linear algebra algorithms. 1)How to reduce the data movement between different memory levels; 2)How to overlap the data movement with computations.
+to be data movement centric. Without careful arrangement of data access patterns, the overall performance will be dominated by the data movement rather than the computations. So, there are two main challenges to be tackled to design high-performance OOC linear algebra algorithms. 1)How to reduce the data movement between different memory levels; 2)How to overlap the data movement with computations.
 
 To illustrate how to address these challenges, we select QR factorization as an example, as it has a well-implemented in-core TensorCore-based algorithm~\cite{QRTensorCore}. And in the rest of this paper, we will try to explain why the conventional blocking algorithms cannot work efficiently and why the recursive algorithms have better performance. Besides, we will also discuss the details of how to implement the OOC QR factorization with data movement perfectly overlapped. We consider our contributions to be:
 % Assuming a 8GB accelerator memory capacity, the largest problem size that
@@ -218,7 +218,7 @@ In 2017, TensorCore technology was introduced by Nvidia on its Tesla architectur
 The recursive linear algebra algorithms have long been
 known to the numerical algorithm communities and have been
 shown to be advantageous over blocking algorithms, 
-however such performance gains are typically rather small, as blocking was
+however such performance gains are typically rather small, as blocking alone was
 able to achieve near peak performance on previous architectures. 
 Examples include recursive Cholesky and LU proposed in Lawra~\cite{lawra} and ReLAPACK~\cite{ReLAPACK},
 recursive partial pivoted LU by Toledo~\cite{toledo1997locality}.
@@ -254,10 +254,10 @@ iPad 2 in~\cite{dongarra2012anatomy}.
 
 
 \section{Performance analysis}
-In this section, we are going to analyze the performance of the recursive algorithm and compare it with the blocking algorithm. The analysis includes the amount of data movement and the overlap behaviors of OOC TCGEMMs. We'll also give a brief introduction to QR factorization to make the analysis more understandable.
+In this section, we'll analyze the performance of the recursive algorithm and compare it with the blocking algorithm. We'll discuss the amount of data movement and the overlapping behaviors of OOC TCGEMMs. We'll also give a brief introduction to QR factorization to make the analysis more understandable.
 
 \subsection{QR factorization}
-The QR factorization, also known as QR decomposition, aims to factorize a matrix $A$ into a product of an orthogonal matrix $Q$ and an upper triangular matrix $R$. It's widely used in the scientific and engineering area to solve orthogonalization, linear least square problems, eigenvalue decomposition, and singular value decomposition problems. There are in general three common-used algorithms for QR factorization, including Gram-Schmidt, Householder, and Givens rotation. In this paper, we use the classic Gram-Schmidt to illustrate our methodology, thus we'll only give the background knowledge of the classic Gram-Schmidt QR factorization algorithm.
+The QR factorization, also known as QR decomposition, aims to factorize a matrix $A$ into a product of an orthogonal matrix $Q$ and an upper triangular matrix $R$. It's widely used in the scientific and engineering area to solve orthogonalization, linear least square problems, eigenvalue decomposition, and singular value decomposition problems. In general, there are three common-used algorithms, including Gram-Schmidt, Householder, and Givens rotation. In this paper, we use the classic Gram-Schmidt to illustrate our methodology, thus we'll only give the background knowledge of the classic Gram-Schmidt QR factorization algorithm.
 
 \subsubsection{Gram-Schmidt process}
 The Gram-Schmidt process aims to find a set of orthonormal vectors in an inner product space. Given an array of linearly independent vectors $[a_1|a_2|a_3|...|a_n]$, the Gram-Schmidt will find the orthonormal basis one by one. Then the set of orthonormal vectors $[q_1|q_2|q_3|...|q_n]$ is given by Equation~(\ref{eq:gramSchmidt}).
@@ -277,7 +277,7 @@ The Gram-Schmidt process aims to find a set of orthonormal vectors in an inner p
     \label{eq:gramSchmidt}
 \end{equation}\normalsize
 in which $\text{Proj}_{u}(a) = uu^Ta=u(u^Ta)$ is the orthogonal projection
-of vector $a$ onto unit vector $u$. 
+of the vector $a$ onto an unit vector $u$. 
 We also obtain $R$ during the Gram-Schmidt process: $r_{ij} = q_i^Ta_i$. 
 % \small\begin{equation}
 %     \begin{aligned}
@@ -316,14 +316,14 @@ stability and parallelism exposed. MGS is more stable but less parallel.
 
 As described above, the Gram-Schmidt process is inefficient on hierarchical memory
 systems due to the low data locality of the vector-matrix operations. To improve
-locality, blocking must be used such that the orthogonal projection of multiple vectors onto multiple orthonormal vectors is performed in one shot. CGS can be trivially
+locality, blocking must be applied such that the orthogonal projection of multiple vectors onto multiple orthonormal vectors is performed in one shot. CGS can be trivially
 blocked since it can be directly ``upgraded'' into blocking algorithm by
 considering the vectors $a_i, u_i$ not as vectors but as a block matrix (a group
-of column vectors). MGS on the other hand is not obvious to block. 
+of column vectors). MGS, on the other hand, is not obvious to block. 
 
 \subsubsection{Blocking Strategy}
 
-The blocking QR factorization's workflow is shown in Fig~\ref{fig:bl_qr}. At first, we select a blocksize $b$ and factorize the first $b$ columns (panel). Then we have the factorized $Q_1$ and let it times the rest of the matrix $A_2$ to get $R_{12}$. The next step is updating the rest of the matrix $A_2$. After that, we start a new panel factorization and repeat the steps until the last panel is factorized. See Fig~\ref{fig:bl_qr} for the intuitive steps.
+The blocking QR factorization's workflow is shown in Fig~\ref{fig:bl_qr}. At first, we select a blocksize $b$ and factorize the first $b$ columns (termed as panel). Then we have the factorized $Q_1$ and let it time the rest of the matrix $A_2$ to get $R_{12}$. The next step is updating the rest of the matrix $A_2$. After that, we start a new panel factorization and repeat the steps until the last panel is factorized. See Fig~\ref{fig:bl_qr} for the intuitive steps.
 
 \begin{figure}
 \includegraphics[width=1.0\columnwidth]{blocking_qr.png} 
@@ -332,7 +332,7 @@ The blocking QR factorization's workflow is shown in Fig~\ref{fig:bl_qr}. At fir
 
 \subsubsection{Recursive Strategy}
 Compared to the blocking strategy, the recursive strategy is not that popular. The reasons might be that blocking algorithms give enough data locality and parallelism on previous architectures; but now on the new matrix accelerators, it no longer can. The recursive algorithm is assembled like this equation~(\ref{eq:recqr}) and the workflow is: at first, we divide evenly its columns
-into two halves, denoted by $A=[A_1 |  A_2]$. We first QR factorize the first half $A_1=Q_1R_{11}$,
+into two halves, denoted by $A=[A_1 |  A_2]$. At first, we factorize the first half $A_1=Q_1R_{11}$,
 and then compute north-east quarter of $R_{12}=Q_1^T A_2$. Next we update the
 second half $A_2 = A_2 - Q_1 R_{12}$. Finally, QR factorize the updated second half
 $A_2 = Q_2 R_{22}$. Note that the QR of the two halves can be recursed using this
@@ -350,10 +350,10 @@ R_{11} & R_{12} \\ \hline
 \caption{Blocking QR factorization steps}\label{fig:re_qr}
 \end{figure}
 
-Zhang~\cite{QRTensorCore} has explained and shown the recursive QR can perform better than the conventional QR on TensorCore. The reason behind the speedup is that recursive algorithms can provide larger GEMMs which can be accelerated much by TensorCore, while the conventional algorithms cannot provide such GEMMs. Different from the in-core algorithms, the OOC algorithms are more dependent on the data movement and elaborate pipelining. So, the following subsections will discuss the effects on the data movement of such algorithms using OOC QR factorization as an example. 
+Zhang~\cite{QRTensorCore} has explained and shown the recursive QR performs better than the conventional QR on TensorCore. The reason behind the speedup is that recursive algorithms can provide larger GEMMs which can be executed more quickly on TensorCore, while the conventional algorithms cannot provide such GEMMs. Different from the in-core algorithms, the OOC algorithms focus more on the data movement and elaborate pipelining issues. So, the following subsections will discuss the effects on the data movement of such algorithms, by using OOC QR factorization as an example. 
 
 \subsection{The Amount of Data Movement}
-In the out-of-core scenario, the panel factorization will be performed on GPU step by step, while the GEMMs will be out-of-core and follow some specific computing pattern. But in this section, to simplify the computations, we'll only discuss the data movement of naive implementation, that the elements will not be reused and it can give us an intuitive overview of the data movement overhead in the worst case.
+In the out-of-core scenario, the panel factorization will be performed on GPU step by step, while the GEMMs will be out-of-core and follow some specific computing pattern. But in this section, to simplify the computations, we'll only discuss the data movement of the naive implementation, that the elements will not be reused and it can give us an overview of the data movement overhead in the worst case.
 
 \subsubsection{Blocking Strategy}
 
@@ -377,16 +377,16 @@ $$
 (\frac{1}{2}log_2^k+1)mn+\frac{n^2}{2}
 $$
 
-According to the quantitative analysis, we can find that both the amount of data movement of blocking and recursive OOC QR is highly related to the number of blocks $k$. Obviously, the data movement of the recursive QR is related to $\log k$, while the blocking QR is linearly related to $k$. This means the gap will become even larger as the $k$ increases. Note that this is only a rough estimation of the data movement because it's based on the assumption that all of the data won't be reused. In practice, some of the matrices can definitely be reused in the computations. But the results can still be a good reference to show the advantages of recursive algorithms, and we will also show the real quantitative data movement results in the evaluation section.
+According to the quantitative analysis, it can be observed that both the amount of data movement of blocking and recursive OOC QR is highly related to the number of blocks $k$. Obviously, the data movement of the recursive QR is related to $\log k$, while the blocking QR is linearly related to $k$. This means the gap will become even larger as the $k$ increases. Note that this is only a rough estimation of the data movement because it's based on the assumption that all of the data won't be reused. In practice, some of the matrices can definitely be reused in the computations. But the results can still be a good reference to show the advantages of recursive algorithms, and we will also give the real quantitative data movement results in the evaluation section.
 
 % \textbf{Is this practically optimal? Can we derive and 
 % prove a lower bound of data movement and attain it?}
 
 \subsection{Overlap Ratio in GEMMs}
-In the above subsection, we've discussed the data movement behaviors and it has been shown that the recursive algorithm has less data movement. In this subsection, we'll try to explain that the recursive algorithm has advantages over the blocking algorithm in terms of GEMMs overlap ratio (here the overlap ratio means how much the data movement can be overlapped by computation).  Typically, there are two types GEMMs, one is an \textbf{inner product} (to simplify the name, we'll call the GEMM types in Fig~\ref{fig:re_inner},~\ref{fig:bl_inner} inner product) to generate $R_{12}=Q_1^TA_2$ and another is an \textbf{outer product} (Fig~\ref{fig:re_outer},~\ref{fig:bl_outer}) to update $A_2=A_2-Q_1R_{12}$. The overlap patterns of these two types are different, thus we'll discuss them separately. 
+In the above subsection, we've discussed the data movement behaviors and it has been shown that the recursive algorithm has less data movement. In this subsection, we'll try to explain that the recursive algorithm has advantages over the blocking algorithm with regard to GEMMs overlap ratio (here the overlap ratio means how much the data movement can be overlapped by computation).  Typically, there are two types GEMMs, one is an \textbf{inner product} (to simplify the name, we'll call the GEMM types in Fig~\ref{fig:re_inner},~\ref{fig:bl_inner} inner product) to generate $R_{12}=Q_1^TA_2$ and another is an \textbf{outer product} (Fig~\ref{fig:re_outer},~\ref{fig:bl_outer}) to update $A_2=A_2-Q_1R_{12}$. The overlap patterns of these two types are different, thus we'll discuss them separately. 
 
 \subsubsection{Inner Product}
-Suppose we have two matrices $A$ and $B$ with size $m\times k$ and $k\times n$. In the recursive QR factorization, $m$ equals to $n$. As the matrix is typically too large to store on the device, we may want to divide the matrices into several tiles. For each tile, we will move in and move out GPU memory to perform computation. In order to obtain the best performance, the time cost of data movement should be overlapped by the time cost of in-core TCGEMMs.
+Suppose we have two matrices $A$ and $B$ with size $m\times k$ and $k\times n$. In the recursive QR factorization, $m$ equals to $n$. As the matrix is typically too large to store on the device, we may want to divide the matrices into several tiles. For each tile, we will move in and move out GPU memory to perform computations. To obtain the best performance, the time cost of data movement should be overlapped by the time cost of in-core TCGEMMs.
 
 \begin{figure}
 \includegraphics[width=1.0\columnwidth]{recursive_inner.png} 
@@ -402,7 +402,7 @@ To minimize the data movement in recursive QR factorization, we follow Fig~\ref{
 
 When it comes to the blocking algorithm, we can let the matrix $A$ to be stored on GPU and divide $B$ into blocks with blocksize $b$, see~\ref{fig:bl_inner}. Therefore, the inequality becomes $\frac{4kb}{R_m}<\frac{2mkb}{R_g}\Longrightarrow m>\frac{2R_g}{R_m}$ and the final $m=15,000$.
 
-It seems that the $m$ in blocking algorithm is easier to achieve, but one thing should be mentioned that the $m$ in blocking algorithm is typically relatively small and fixed to allow the panel to be stored on the device, especially when the GPU memory is limited and the number of columns of the factorized matrix is large. For example, if the GPU memory is 16GB and we want to factorize a matrix with size $131072\times 131072$, then the $m$ is typically less than 10,000 to avoid running out of GPU memory. In contrast, the $m$ in the recursive algorithm is more flexible and not related to the blocksize. Still, with a GPU has 16GB memory, factorize a $131072\times 131072$ matrix will lead to four inner products if the blocksize is 8192, including $8192\times 131072 \times 8192$, $16384\times 131072 \times 16384$, $32768\times 131072 \times 32768$ and $65536\times 131072 \times 65536$. Obviously, at least the data movement in the largest two GEMMs can be perfectly overlapped (computing bound), while all of the GEMMs in blocking QR are memory bound. Regarding the smaller GEMMs in the recursive QR, we'll discuss how to optimize them in the next section.
+It seems that the $m$ in blocking algorithm is easier to achieve, but one thing should be mentioned that the $m$ in blocking algorithm is typically relatively small and fixed to allow the panel to be stored on the device, especially when the GPU memory is limited and the number of columns of the original matrix is large. For example, if the GPU memory is 16GB and we want to factorize a matrix with size $131072\times 131072$, then the $m$ is typically less than 10,000 to avoid running out of GPU memory. In contrast, the $m$ in the recursive algorithm is more flexible and not related to the blocksize. Still, with a GPU has 16GB memory, factorize a $131072\times 131072$ matrix will lead to four inner products if the blocksize is 8192, including $8192\times 131072 \times 8192$, $16384\times 131072 \times 16384$, $32768\times 131072 \times 32768$ and $65536\times 131072 \times 65536$. At least the data movement in the largest two GEMMs can be perfectly overlapped (computing bound), while all of the GEMMs in blocking QR are memory bound. Regarding the smaller GEMMs in the recursive QR, we'll discuss how to optimize them in the next section.
 
 \subsubsection{Outer Product}
 Similarly,suppose the GEMM size is $m\times n\times k$ (matrices sizes are $m\times k$ and $k\times n$). For the outer product, we'll use a different strategy to minimize the data movement. 
@@ -419,20 +419,20 @@ For the recursive algorithm, we can let the matrix $B$ to be stored on GPU, and 
 \caption{Out-of-core outer product tiling strategy in blocking QR factorization}\label{fig:bl_outer}
 \end{figure}
 
-With regard to the blocking algorithm, as the matrix $A$ and $B$ is tall and skinny, we can let both $A$ and $B$ be stored on GPU to avoid unnecessary data movement. In this case, we can only care about the data movement of $C$, and the strategy is shown in Fig~\ref{fig:bl_outer}. The time cost of moving $C$ from CPU to GPU will take $\frac{4b_1b_2}{R_m}$ and we'll spend $\frac{2b_1kb_2}{R_g}$ on TCGEMM. Hence, the $k$ should be larger than 1.5e4 to overlap the data movement.
+For the blocking algorithm, as the matrix $A$ and $B$ is tall and skinny, we can let both $A$ and $B$ to be stored on GPU to avoid unnecessary data movement. In this case, we can only care about the data movement of $C$, and the strategy is shown in Fig~\ref{fig:bl_outer}. The time cost of moving $C$ from CPU to GPU will take $\frac{4b_1b_2}{R_m}$ and we'll spend $\frac{2b_1kb_2}{R_g}$ on TCGEMM. Hence, the $k$ should be larger than 1.5e4 to overlap the data movement.
 
 Although the strategy is different in the two GEMM types, the results are the same. Based on our analysis, we cannot expect the data movement of the blocking algorithm to be overlapped if we desire minimum data movement. Note that we didn't compute the time cost of moving data from GPU to CPU, as this kind of data movement can always be overlapped by moving data from CPU to GPU.
 
 \subsection{Summary}
-We've mentioned in the first section that in designing a high-performance OOC algorithm, the data movement should be reduced and the overlap ratio should be higher. From our above analysis, we could find that the recursive algorithm has advantages over the blocking algorithm because it can reduce data movement and increase data overlap rate. Specifically, the performance of GEMMs in the recursive algorithm is less relevant to the blocksize, while the performance of GEMMs in the blocking algorithm is restricted by the blocksize. This means the recursive algorithm is more likely to perform even better on GPUs with smaller memory or larger scale matrices. In addition, we can also have more flexibility to optimize the large GEMMs in the recursive algorithm, because we don't really care about the blocksize. Regarding the small GEMMs, we'll introduce the optimization strategy in the next section.  
+We've mentioned in the first section that in designing a high-performance OOC algorithm, the data movement should be reduced and the overlap ratio should be higher. From our above analysis, we could find that the recursive algorithm has advantages over the blocking algorithm because it can reduce data movement and increase data overlap ratio. Specifically, the performance of GEMMs in the recursive algorithm is less relevant to the blocksize, while the performance of GEMMs in the blocking algorithm is restricted by the blocksize. This means the recursive algorithm is more likely to perform even better on GPUs with smaller memory or larger scale matrices. In addition, we can also have more flexibility to optimize the large GEMMs in the recursive algorithm, because we don't really care about the blocksize. For the small GEMMs, we'll introduce the optimization strategy in the next section.  
 
 \section{Implementation and Optimization}
-We've already shown the recursive QR factorization has better data movement behaviors and overlapping potential, the implementation and optimization are very important as well. So, in this section, we'll illustrate our implementation and optimization strategy. Note that we divide the optimization into two parts, the first part is the optimization inside GEMMs, which is called GEMM-level optimization; the second part is optimizing the data transferring between panel factorization and GEMMs, and it's named QR-level optimization. 
+We've already shown the recursive QR factorization has better data movement behaviors and overlapping ratio, the implementation and optimization are very important as well. So, in this section, we'll illustrate our implementation and optimization strategy. Note that we divide the optimization into two parts, the first part is the optimization inside GEMMs, which is called GEMM-level optimization; the second part is optimizing the data transferring between panel factorization and GEMMs, and it's termed as QR-level optimization. 
 
 \subsection{GEMM-Level Implementation and Optimization}
 Similar to the performance analysis, the two types of GEMMs have two different implementations.
 \subsubsection{Inner Product}
-Typically, to implement a high concurrent CPU-GPU program, we should be clear about how to use the streams. Cuda streams\footnote{\url{https://developer.nvidia.com/blog/gpu-pro-tip-cuda-7-streams-simplify-concurrency/}} are introduced by Nvidia to solve the concurrency problems of executing programs on the device. Generally speaking, with streams and proper devices (most modern Nvidia GPUs support CUDA streams), moving data from device to host, from host to device, and in-core computations can be executed at the same time. In our problem scenario, moving data from host to device, in-core computations, and moving data from device to host can work concurrently, because computation can overlap with communication, and the host-device communication links are bidirectional. Therefore, we need at least three \verb|cudaStream| to make these three assignments possible to run in parallel. But because it's inner product, it's unnecessary to transfer the matrix $C$ from device to host before the entire computation is ended. Thus, we only need to let the move-in operations and the computations be asynchronous, and move the data out in the end. In this case, we create several streams and each stream takes charge of one block. The final pipeline is shown in Fig~\ref{fig:rec_inner_time}.
+Typically, to implement a high concurrent CPU-GPU program, we should be clear about how to use the streams. Cuda streams\footnote{\url{https://developer.nvidia.com/blog/gpu-pro-tip-cuda-7-streams-simplify-concurrency/}} are introduced by Nvidia to solve the concurrency problems of executing programs on the device. Generally speaking, with streams and proper devices (most modern Nvidia GPUs support CUDA streams), moving data from device to host, from host to device, and in-core computations can be executed at the same time. In our problem scenario, moving data from host to device, in-core computations, and moving data from device to host can work concurrently, because computations can be overlapped by communications, and the host-device communication links are bidirectional. Therefore, we need at least three streams to make these three assignments run in parallel. But because it's inner product, it's unnecessary to transfer the matrix $C$ from device to host before the entire computations is ended. Thus, we can only let the move-in operations and the computations be asynchronous, and move the data out in the end. In this case, we create several streams and each stream takes charge of one block. The final pipeline is shown in Fig~\ref{fig:rec_inner_time}.
 
 \subsubsection{Outer Product}
 In terms of this type of GEMM, as we discussed before, the $B$ is already stored on GPU (the $B$ is the result of the inner product, there's no need to copy it from CPU to GPU again). So, we only need to read tiles in $A$ and $C$ and write to the tiles in $C$. But because of the limited GPU memory, we use the same GPU memory space to store the matrix $C$, which means the move-in operation should be performed after finishing the entire move-out operation to avoid conflict. This waiting impedes the performance because the move-out operation cannot be overlapped. To solve this problem, we use extra memory space to temporally store the $C$ and once the move-out operation is done, we perform a fast in-core data transferring, and at the same time, we start another move-in operation, see Fig~\ref{fig:rec_outer_time}.
@@ -441,25 +441,25 @@ In terms of this type of GEMM, as we discussed before, the $B$ is already stored
 The blocksize of GEMMs cannot be selected casually. Smaller blocksize leads to slower in-core computation, and larger blocksize will increase the overhead of the first move-in operation and the last move-out operation. So we can follow this strategy: start with a relatively small blocksize and gradually increase it to the max blocksize. Consider this situation, when we're computing the largest inner product in recursive QR with GEMM size $65536*131072*65536$, and we set the blocksize to be 8192. Then the first step is to compute a GEMM with a size of $65536*8192*65536$. Obviously, if we start with blocksize 8192, then the first move-in operation cannot be overlapped by computations. But if we start with blocksize 2048 and gradually increase the blocksize to 8192, then the same part of the move-in operation of the first block ($65536*8192$) can be overlapped. Actually, based on our experimental results, this trick increases the inner product performance from around 85TFLOPs to 87TFLOPs. 
 
 \subsection{QR-Level Implementation and Optimization}
-So far, the GEMM optimization is done, but there are still some problems left. For example, how to deal with small GEMMs? The $m$ or $n$ in small GEMMs is not large enough so that the data movement cannot be overlapped perfectly. Indeed, we cannot optimize the small GEMMs anymore because of the insufficient data intensity, but we can tackle this problem in the QR-level optimization that can help us avoid unnecessary data movement. The optimization doesn't happen inside GEMMs but works between QR panel factorization and the GEMMs. In fact, using the result from the inner product in the outer product to reduce unnecessary data movement can be regarded as QR-level optimization to some extent.
+So far, the optimization of OOC GEMMs is done, but there are still some problems left. For example, how to deal with small GEMMs? The $m$ or $n$ in small GEMMs is not large enough so that the data movement cannot be overlapped perfectly. Indeed, we cannot optimize the small GEMMs anymore because of the insufficient data intensity, but we can tackle this problem in the QR-level optimization that can helps us avoid unnecessary data movement. The optimization doesn't happen inside GEMMs but works between QR panel factorization and the GEMMs. Besides, using the results from the inner product in the outer product to reduce unnecessary data movement can also be regarded as QR-level optimization to some extent.
 
 So, after answering what's QR-level optimization and implementation, the question becomes how to implement and optimize it. Actually, the implementation is quite easy, following the design pattern of the in-core recursive QR~\cite{QRTensorCore} is the solution. But the difficulty is how to optimize it, including cutting off the unnecessary data movement and enabling
 cross BLAS operation overlapping.
 
-The first optimizing strategy is cutting off some move-in operations of the panel. Because when the GEMM size is small, the entire result can be stored on GPU and it can be used directly in the next panel factorization. Similarly, when the GEMM size is small, it doesn't really need to read the matrix $A$ from CPU, it can directly use the panel factorization result and only read $B$ from CPU.
+The first optimizing strategy is cutting off some move-in operations of the panel. Because when the GEMM size is small, the entire results can be stored on GPU and they can be used directly in the next panel factorization. Similarly, when the GEMM size is small, it doesn't really need to read the matrix $A$ from CPU, it can directly use the panel factorization results and only read $B$ from CPU.
 
-The second optimizing strategy is trying to hide the move-out operations between panel factorization and GEMMs. For example, when the panel factorization is finished and the factorized matrix is ready to be transferred to host, we can perform a move-in operation for inner product at the same time. This kind of overlapping can also happen between inner product and outer product. When we're moving $R_{12}$ out, we can move in the first blocks of $A$ and $C$. Also, after the outer product, the last move-out operation can be overlapped by moving in the first few columns of the panel. See Fig~\ref{fig:rec_qr_time} for the intuitive optimization result.
+The second optimizing strategy is trying to hide the move-out operations between panel factorization and GEMMs. For example, when the panel factorization is finished and the factorized matrix is ready to be transferred to host, we can perform a move-in operation for inner product at the same time. This kind of overlapping can also happen between inner product and outer product. When we're moving $R_{12}$ out, we can move in the first blocks of $A$ and $C$. Also, after the outer product, the last move-out operation can be overlapped by moving in the first few columns of the panel. See Fig~\ref{fig:rec_qr_time} for the intuitive optimization results.
 
 \section{Experimental evaluation}
-In this section, we're going to show our experimental results of the OOC QR factorization. We will evaluate the performance of the GEMMs and the entire QR, by providing the overall execution time and the timelines. 
+In this section, we're going to show our experimental results of the OOC QR factorization. We will evaluate the performance of the GEMMs and the entire QR factorization, by providing the overall execution time and the timelines. 
 
-For all the experiments we use a3.10.0-1160.11.1.el7.x86\_64 Linux operating system with 128GB memory. The GPU is NVIDIA V100 GPU (32GB) PCIe version. The CUDA version is 10.1, which contains a C++ compiler and cublas library. The in-core QR factorization is based on the LATER project.\footnote{\url{https://github.com/Orgline/LATER}}
+For all experiments we use a3.10.0-1160.11.1.el7.x86\_64 Linux operating system with 128GB memory. The GPU is NVIDIA V100 GPU (32GB) PCIe version. The CUDA version is 10.1, which contains a C++ compiler and cublas library. The in-core QR factorization is based on the LATER project.\footnote{\url{https://github.com/Orgline/LATER}}
 
 \subsection{The Performance Behaviours of GEMMs}
-As we discussed before, the shapes and sizes of GEMMs in recursive QR and blocking QR are different, therefore, in this subsection, we'll study the performance behaviors of the largest GEMMs (because they cost most of the entire QR factorization time) in recursion and blocking. Table~\ref{tbl:inner} and Table~\ref{tbl:outer} show the quantitative results of the GEMMs, including the time cost of data movement, GEMMs, overall time cost, and relative flops. Meanwhile, Fig~\ref{fig:blk_inner_time}, ~\ref{fig:rec_inner_time}, ~\ref{fig:blk_outer_time} and~\ref{fig:rec_outer_time} give the timelines of the different OOC GEMMs.
+As we discussed before, the shapes and sizes of GEMMs in the recursive QR and blocking QR are different, therefore, in this subsection, we'll study the performance behaviors of the largest GEMMs (because they cost a large portion of the entire QR factorization time) in recursion and blocking. Table~\ref{tbl:inner} and Table~\ref{tbl:outer} show the quantitative results of the GEMMs, including the time cost of data movement, GEMMs, overall time cost, and relative flops. Meanwhile, Fig~\ref{fig:blk_inner_time}, ~\ref{fig:rec_inner_time}, ~\ref{fig:blk_outer_time} and~\ref{fig:rec_outer_time} give the timelines of the different OOC GEMMs.
 
 \subsubsection{Inner product performance}
-In terms of inner product, in the previous analysis, we assume that all in-core computations run at 90TFLOPs. But the results suggest that the largest GEMM in blocking QR doesn't obey the rule, as the in-core GEMM only runs at 52.6TFLOPs, while the in-core recursive GEMM runs at 99.9TFLOPs. This is probably because of the special shape of the blocking in-core GEMM. Actually, in the TensorCore-based QR paper~\cite{QRTensorCore}, the authors also mention that tall and skinny GEMMs are very hard to run at peak speed on TensorCore. Fortunately, the in-core recursive GEMMs don't have this weak point when the GEMMs are large enough. No doubt the small GEMMs will also have some problem, but after all, they are only a small part of the entire computations, while the blocking GEMMs need to face this challenge in the complete period because it consists of fixed small-sized and shaped GEMMs which are inefficient on TensorCore.
+In terms of inner product, in the previous analysis, we assume that all in-core computations run at 90TFLOPs. But the results suggest that the largest GEMM in blocking QR doesn't obey the rule, as the in-core GEMM only runs at 52.6TFLOPs, while the in-core recursive GEMM runs at 99.9TFLOPs. This is probably because of the special shape of the blocking in-core GEMM. Actually, in the TensorCore-based QR paper~\cite{QRTensorCore}, the authors also mention that tall and skinny GEMMs are very hard to run at peak speed on TensorCore. Fortunately, the in-core recursive GEMMs don't have this weak point when the GEMMs are large enough. No doubt that the small GEMMs will also have some problem, but after all, they're only a small part of the entire computations, while the blocking GEMMs need to face this problem in the complete period because it consists of fixed small-sized and shaped GEMMs which are inefficient on TensorCore.
 
 Both timelines of the inner product (Fig~\ref{fig:blk_inner_time},\ref{fig:rec_inner_time}) show a good overlap rate. In other words, the time cost of close to peak GEMMs dominate the entire computations.
 \begin{table}[h]
@@ -510,7 +510,7 @@ Overall Time cost &  Recursive & Blocking \\
 
 When it comes to the outer product performance, things become slightly different. When the QR blocksize is 16384, there's no big difference between the two types of GEMMs. Both the in-core GEMM and the overlap rate are desirable. But because the experiments are performed on V100 GPU which has 32GB device memory, the QR blocksize can be as large as 16384 so that the data movement is able to be overlapped perfectly based on our analysis. 
 
-However, most of the widely-used GPUs, such as RTX 20,30 series, don't have such a big in-core memory. On these GPUs, the QR blocksize need to be reduced as a compromise. For example, Fig~\ref{fig:blk_outer_time_8192} shows the timeline of the blocking GEMMs with QR blocksize 8192, and we can see that the GEMMs cannot be overlapped anymore. Quantitatively, the time cost of host to device, GEMM, and device to host is 347ms, 170ms, 326ms. The computation time is dominated by the data movement, thus even if the total number of the flop of blocking GEMMs with QR blocksize 8192 is around 2x less than the GEMMs with QR blocksize 16384, the computations still spend more time.
+However, most of the widely-used GPUs, such as RTX 20,30 series, don't have such a big device memory. On these GPUs, the QR blocksize need to be reduced as a compromise. For example, Fig~\ref{fig:blk_outer_time_8192} shows the timeline of the blocking GEMMs with QR blocksize 8192, and we can see that the GEMMs cannot be overlapped anymore. Quantitatively, the time cost of host to device, GEMM, and device to host is 347ms, 170ms, 326ms. The computation time is dominated by the data movement, thus even if the total number of the flop of blocking GEMMs with QR blocksize 8192 is around 2x less than the GEMMs with QR blocksize 16384, the computations still spend more time.
 
 \begin{table}[h]
 
@@ -560,18 +560,18 @@ Overall Time cost &  Recursive & Blocking \\
 \caption{The timeline of computing outer product GEMM with QR blocksize 8192, the matrix size is 131072*16384*131072, the inside GEMM blocksize $b_1, b_2$ is 32768 and 32768.}\label{fig:blk_outer_time_8192}
 \end{figure}
 
-In fact, the implementations of the GEMMs can be said to be optimal. For example, in terms of the outer product, our OOC GEMM will cost 11,517ms in total and the in-core computation costs 654*16=10,464ms. Add the first move-in and the last move-out time consumption (because they cannot be overlapped at all), we get the ideal time cost is 10,974ms. This is a fixed upper bound of the given GEMM with blocksize 8192. But there's no doubt that in real computations, some time will be wasted due to the delays and synchronizations, so the gap (543ms) is reasonable. In other words, the GEMM is optimal.
+In fact, the implementations of the GEMMs can be said to be optimal. For example, in terms of the outer product, our OOC GEMM will cost 11,517ms in total and the in-core computation costs 654*16=10,464ms. Add the first move-in and the last move-out time consumption (because they cannot be overlapped at all), we get the ideal time cost is 10,974ms. This is a fixed upper bound of the given GEMM with blocksize 8192. But there's no doubt that in real computations, some time will be wasted due to the delays and synchronizations, so the gap (543ms) is reasonable. In other words, the GEMMs are optimal.
 
 
 \subsection{The Performance Behaviour of QR}
 The performance of the two types of QR factorization is highly affected by the GEMMs because the in-core panel factorization is exactly the same. This means the recursive algorithm has big advantages over blocking algorithms because it has faster GEMMs. With regard to the QR-level optimization and overlapping, according to our analysis, the acceleration from reducing data movement and overlapping is very similar.
 
-Fig~\ref{fig:blk_qr_time} and Fig~\ref{fig:rec_qr_time} demonstrate the timeline of the entire QR factorization performance behaviours. It's obvious that with QR blocksize 16384, the recursive QR takes advantage of the higher rate of inner product thereby beats the blocking QR factorization. We can also find the QR-level optimization helps the two factorization gain around 15\% speedup. 
+Fig~\ref{fig:blk_qr_time} and Fig~\ref{fig:rec_qr_time} demonstrate the timeline of the entire QR factorization. It's obvious that with QR blocksize 16384, the recursive QR takes advantage of the higher rate of inner product thereby beats the blocking QR factorization. We can also find the QR-level optimization helps the two factorization gain around 15\% speedup. 
 
-However, when the blocksize is 8192, the performance of blocking QR goes down significantly due to the increasing time cost of GEMMs, as the data movement cannot be overlapped by the in-core GEMMs anymore (the time cost is 347ms,	170ms, 326ms for move-in, GEMM, move-out respectively). In contrast, the performance of recursive QR doesn't change much. It's not surprising to see this result, because the panel factorization is recursive, therefore, the only difference is the amount of data movement (can be overlapped mostly). We simulate the factorization by limiting the memory usage to be less than 16GB on V100 GPU and the results are shown in Fig~\ref{fig:blk_qr_time_8192},~\ref{fig:rec_qr_time_8192}. The speedup of recursive QR factorization is nearly 2x compared to the blocking QR factorization. The results also suggest that the higher ratio computation speed/memory capacity is, the more advantageous recursive vs blocking is.
+However, when the blocksize is 8192, the performance of blocking QR goes down significantly due to the increasing time cost of GEMMs, as the data movement cannot be overlapped by the in-core GEMMs anymore (the time cost is 347ms,	170ms, 326ms for move-in, GEMM, move-out respectively). In contrast, the performance of recursive QR doesn't change much. It's not surprising to see this result, because the panel factorization is recursive, therefore, the only difference is the amount of data movement (can be overlapped mostly). We simulate the factorization by limiting the memory usage to be less than 16GB on V100 GPU and the results are shown in Fig~\ref{fig:blk_qr_time_8192},~\ref{fig:rec_qr_time_8192}. The speedup of recursive QR factorization is nearly 2x compared to the blocking QR factorization. The results also suggest that the higher ratio computation speed/memory capacity is, the more advantageous recursive vs. blocking is.
 
 
-Another obvious difference between the two factorizations is the amount of the overall data movement. See Table~\ref{tbl:data_mv}. The results can verify our claim that the recursive algorithm has less data movement than the blocking algorithm. Actually, the data movement is not very important here, because most data movement can be overlapped. But it's still valuable to see such difference because in some specific situations where moving data can not be hidden, the recursive algorithm can still help. 
+Another obvious difference between the two factorization is the amount of the overall data movement. See Table~\ref{tbl:data_mv}. The results can verify our claim that the recursive algorithm has less data movement than the blocking algorithm. Actually, the data movement is not very important here, because most data movement can be overlapped. But it's still valuable to see such difference because in some specific situations where moving data can not be hidden, the recursive algorithm still can help. 
 \begin{table}
 \centering
 \begin{tabular}{ |c|c|c|c| } 
@@ -607,7 +607,8 @@ Data movement time &  Recursive & Blocking \\
 \caption{The timeline of computing recursive out-of-core QR, the blocksize is 8192. }\label{fig:rec_qr_time_8192}
 \end{figure}
 
-To make our experiments more convincing, we also did other proof experiments with different matrix shapes and sizes. However, limited by our main memory capacity, we only tested the matrices with sizes 65536*65536 and 262144*65536. Table~\ref{tbl:qr_comparison} demonstrates the time cost of the GEMMs and panel when we're using the blocking and the recursive strategy with blocksize 8192. The inside OOC GEMMs in recursive QR factorization still show a great advantage over the blocking algorithm.
+To make our experiments more complete, we also experiment with different matrix shapes and sizes. However, limited by our main memory capacity, we only tested the matrices with sizes 65536*65536 and 262144*65536. Table~\ref{tbl:qr_comparison} demonstrates the time cost of the GEMMs and panel when we're using the blocking and the recursive strategy with blocksize 8192, respectively. In terms of the overall performance (Panel+GEMMs+data movement), we get 1.5x and 1.7x speedup respectively. As we can see in the Table~\ref{tbl:qr_comparison}, the time cost of the panel is the same among the two strategies, because we're using the same in-core panel factorization. The time cost of the GEMMs show significant differences, for the reason that the recursive strategy can provide larger data overlap ratio and better matrices' shapes to be performed on TensorCore. However, we can observe that the speedup is not as high as the size 131072*131072 (2.0x) because of two reasons: 1) the size 131072*131072 has larger proportion of GEMMs, which means it has more opportunities to enjoy the faster OOC GEMMs; 2) the matrix shapes are easier to be accelerated on TensorCore (the GEMMs in the size 262144*65536 are taller and thinner). Based on the these experiments, we can conclude that the recursive QR factorization usually show a great advantage over the blocking algorithm on different sizes, and the larger and the more square matrices the matrices are the better.
+% The inside OOC GEMMs in recursive QR factorization still show a great advantage over the blocking algorithm. 
 
 \begin{table}
 \centering
@@ -648,7 +649,7 @@ can perform faster.
 It's interesting to think about if this kind of strategy can be applied to other applications such as LU and Cholesky factorization. As there's no in-core TensorCore based partial pivoted LU and Cholesky factorization, we can only analyze it theoretically. The pattern of out-of-core LU and Cholesky factorization is very similar to the out-of-core QR factorization, which is interleaving panel factorization and trailing matrix update. For example, the trailing matrix update in LU factorization is also of outer product form, and the recursive algorithm can definitely help this kind of GEMMs. 
 Anyway, the other out-of-core linear algebra algorithms are included in our future work.
 
-Another attempt that will be considered in the future is trying to deploy the recursive algorithms on A100 GPU, whose peak performance of TensorCore is over 300TFLOPS. In this situation, the blocksize must be larger than 60k if we want the inside GEMMs to be computation-dominated. So, it becomes impossible for blocking algorithms to have such a big blocksize due to limited memory space. But for recursive algorithms, the dominant large GEMMs can run at full speed, which indicates the recursive algorithm might be even more advantageous than on V100. More accessible architectures such as RTX20,30 series with slightly reduced computation speed and much reduce memory capacity will see a bigger advantage of recursion as well for the same reason. Going forward, the gap between computation speed and data movement speed/memory capacity is likely going to continue to increase, in which cases conventional blocking will be increasingly data movement constrained and has ever lower efficiency. 
+Another attempt that will be considered in the future is trying to deploy the recursive algorithms on A100 GPU, whose peak performance of TensorCore is over 300TFLOPS. In this situation, the blocksize must be larger than 60k if we want the inside GEMMs to be computation-dominated. So, it becomes impossible for blocking algorithms to have such a big blocksize due to the limited memory space. But for recursive algorithms, the dominant large GEMMs can run at full speed, which indicates the recursive algorithm might be even more advantageous than on V100. More accessible architectures such as RTX20,30 series with slightly reduced computation speed and much reduced memory capacity will see a bigger advantage of recursion as well for the same reason. Going forward, the gap between computation speed and data movement speed/memory capacity is likely going to continue to increase, in which cases conventional blocking will be increasingly data movement constrained and has ever lower efficiency. 
 \bibliographystyle{ACM-Reference-Format}
 \bibliography{all,references}
 
